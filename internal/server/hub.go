@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 
 	balloonsv1 "github.com/GEHACK/balloons/gen/balloons/v1"
 	"github.com/GEHACK/balloons/internal/domjudge"
+	"github.com/GEHACK/balloons/internal/loom"
 	"github.com/GEHACK/balloons/internal/printer"
 	"github.com/GEHACK/balloons/internal/state"
 )
@@ -26,6 +29,7 @@ type Hub struct {
 	dj      *domjudge.Client
 	printer printer.Printer
 	store   *state.Store
+	loom    *loom.Client
 
 	hideGroups         map[string]bool
 	noFirstSolveGroups map[string]bool
@@ -46,7 +50,7 @@ type subscriber struct {
 	ch chan *balloonsv1.StreamBalloonsResponse
 }
 
-func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, hideGroupIDs, noFirstSolveGroupIDs []string, scanBaseURL string, loc *time.Location) *Hub {
+func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, lm *loom.Client, hideGroupIDs, noFirstSolveGroupIDs []string, scanBaseURL string, loc *time.Location) *Hub {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -54,6 +58,7 @@ func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, hideGrou
 		dj:                 dj,
 		printer:            p,
 		store:              store,
+		loom:               lm,
 		hideGroups:         toSet(hideGroupIDs),
 		noFirstSolveGroups: toSet(noFirstSolveGroupIDs),
 		scanBaseURL:        strings.TrimRight(scanBaseURL, "/"),
@@ -116,6 +121,14 @@ func (h *Hub) print(t printer.Ticket) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if mapPath, cleanup, err := h.fetchMap(ctx, t.TeamID, t.BalloonID); err != nil {
+		// Map is best-effort — the ticket still has the team's name and
+		// location number, so we print without it rather than failing.
+		log.Printf("print balloon %d: fetch map: %v", t.BalloonID, err)
+	} else {
+		t.MapPath = mapPath
+		defer cleanup()
+	}
 	if err := h.printer.Print(ctx, t); err != nil {
 		log.Printf("print balloon %d: %v", t.BalloonID, err)
 		return
@@ -123,6 +136,35 @@ func (h *Hub) print(t printer.Ticket) {
 	if err := h.store.RecordPrinted(t.BalloonID); err != nil {
 		log.Printf("print balloon %d: record: %v", t.BalloonID, err)
 	}
+}
+
+// fetchMap downloads the per-team map image from loom and writes it to a
+// temp file. Returns the path and a cleanup func to remove it. Returns a nil
+// cleanup and a nil error when no loom client is configured, so callers can
+// skip the map block without treating "disabled" as a failure.
+func (h *Hub) fetchMap(ctx context.Context, teamID string, balloonID int64) (string, func(), error) {
+	if h.loom == nil || teamID == "" {
+		return "", func() {}, nil
+	}
+	body, err := h.loom.Fetch(ctx, teamID)
+	if err != nil {
+		return "", nil, err
+	}
+	f, err := os.CreateTemp("", fmt.Sprintf("balloon-map-%d-*.png", balloonID))
+	if err != nil {
+		return "", nil, fmt.Errorf("create map tempfile: %w", err)
+	}
+	path := f.Name()
+	if _, err := f.Write(body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", nil, fmt.Errorf("write map tempfile: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", nil, fmt.Errorf("close map tempfile: %w", err)
+	}
+	return path, func() { _ = os.Remove(path) }, nil
 }
 
 // Reprint clears the local "already printed" mark for this balloon and

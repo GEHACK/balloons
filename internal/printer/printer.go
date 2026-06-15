@@ -33,6 +33,11 @@ type Ticket struct {
 	// has no SCAN_BASE_URL configured; templates render a placeholder in
 	// that case.
 	ScanURL string
+
+	// MapPath is a filesystem path to the per-team map image fetched from
+	// loom. Empty if the loom fetch failed or wasn't configured; the
+	// template omits the map block in that case.
+	MapPath string
 }
 
 type Printer interface {

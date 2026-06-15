@@ -31,6 +31,7 @@ func typstInputs(t Ticket) []string {
 		"--input", "in_delivery=" + strings.Join(t.InDelivery, ","),
 		"--input", "first_solve=" + strconv.FormatBool(t.FirstSolve),
 		"--input", "scan_url=" + t.ScanURL,
+		"--input", "map_path=" + t.MapPath,
 	}
 }
 
@@ -47,7 +48,10 @@ type typstOpts struct {
 // the temp file (if any) is removed.
 func renderTypst(ctx context.Context, t Ticket, opts typstOpts) (string, error) {
 	out := filepath.Join(os.TempDir(), fmt.Sprintf("balloon-%d-%d.%s", t.BalloonID, time.Now().UnixNano(), opts.ext))
-	args := []string{"compile"}
+	// --root / so absolute paths (e.g. the per-ticket map fetched from loom
+	// and written to os.TempDir()) resolve. Typst's default root is the
+	// template's parent directory, which would reject anything under /tmp.
+	args := []string{"compile", "--root", "/"}
 	if opts.format != "" {
 		args = append(args, "--format", opts.format)
 	}

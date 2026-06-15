@@ -5,12 +5,13 @@
 #let ticket-id = sys.inputs.at("ticket_id", default: "41")
 #let problem-letter = sys.inputs.at("problem", default: "C")
 #let uni-name = sys.inputs.at("team_name", default: "Eindhoven University of Technology")
-#let team-number = sys.inputs.at("team_id", default: "41")
+#let team-number = sys.inputs.at("team_id", default: "1")
 #let balloons-input = sys.inputs.at("balloons", default: "A,B,C,D,E,F,G,H,I,J,K,L")
 #let delivered = sys.inputs.at("delivered", default: "A,B").split(",").map(s => s.trim()).filter(s => s != "")
 #let in-delivery = sys.inputs.at("in_delivery", default: "C").split(",").map(s => s.trim()).filter(s => s != "")
 #let is-first-solve = sys.inputs.at("first_solve", default: "false") == "true"
 #let scan-url = sys.inputs.at("scan_url", default: "")
+#let map-path = sys.inputs.at("map_path", default: "")
 #let page-width-mm = float(sys.inputs.at("page_width_mm", default: "80"))
 
 // --- Page setup ---
@@ -121,8 +122,10 @@
   #v(2mm)
   #text(weight: "regular")[Location #team-number]
 
-  #v(2mm)
-  #image("map-image.png")
+  #if map-path != "" [
+    #v(2mm)
+    #image(map-path)
+  ]
 
   #v(2mm)
   #h-line()

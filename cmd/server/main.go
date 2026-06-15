@@ -14,6 +14,7 @@ import (
 
 	"github.com/GEHACK/balloons/gen/balloons/v1/balloonsv1connect"
 	"github.com/GEHACK/balloons/internal/domjudge"
+	"github.com/GEHACK/balloons/internal/loom"
 	"github.com/GEHACK/balloons/internal/printer"
 	"github.com/GEHACK/balloons/internal/server"
 	"github.com/GEHACK/balloons/internal/state"
@@ -28,6 +29,7 @@ type config struct {
 	hideGroups  []string
 	noFSGroups  []string
 	scanBaseURL string
+	loomBaseURL string
 	loc         *time.Location
 }
 
@@ -51,6 +53,7 @@ func loadConfig() (config, error) {
 		hideGroups:  parseCSV(os.Getenv("HIDE_GROUP_IDS")),
 		noFSGroups:  parseCSV(os.Getenv("NO_FIRST_SOLVE_GROUP_IDS")),
 		scanBaseURL: resolveScanBaseURL(os.Getenv("SCAN_BASE_URL"), addr),
+		loomBaseURL: getenv("LOOM_BASE_URL", "https://loom.gehack.nl"),
 		loc:         loc,
 	}, nil
 }
@@ -77,7 +80,13 @@ func main() {
 	}
 	defer store.Close()
 
-	hub := server.NewHub(cfg.dj, p, store, cfg.hideGroups, cfg.noFSGroups, cfg.scanBaseURL, cfg.loc)
+	var lm *loom.Client
+	if cfg.loomBaseURL != "" {
+		lm = loom.New(cfg.loomBaseURL)
+		log.Printf("loom map source: %s", cfg.loomBaseURL)
+	}
+
+	hub := server.NewHub(cfg.dj, p, store, lm, cfg.hideGroups, cfg.noFSGroups, cfg.scanBaseURL, cfg.loc)
 	go hub.Run(ctx)
 
 	svc := &server.Server{Hub: hub, DJ: cfg.dj, Store: store}
