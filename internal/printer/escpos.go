@@ -138,10 +138,14 @@ func copyFile(src, dst string) error {
 // few extra ms per ticket.
 func writePaced(ctx context.Context, conn net.Conn, payload []byte) error {
 	const (
-		chunkSize    = 4096
-		chunkPause   = 15 * time.Millisecond
-		perChunkTO   = 5 * time.Second
-		overallLimit = 60 * time.Second
+		chunkSize  = 2048
+		chunkPause = 30 * time.Millisecond
+		perChunkTO = 5 * time.Second
+		// 90s is generous — a 1400-row ticket writes ~50 chunks with a
+		// 30ms pause each ≈ 1.5s of pure pacing, plus TCP time. The bulk
+		// of the budget is there so a genuinely slow printer surfaces as
+		// a timeout instead of blocking the hub forever.
+		overallLimit = 90 * time.Second
 	)
 	deadline := time.Now().Add(overallLimit)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
@@ -209,14 +213,18 @@ func encodeESCPOS(img image.Image, targetWidth int) []byte {
 	buf.Write([]byte{0x1b, 0x33, 0x00}) // ESC 3 0 — line spacing to 0 so chunked GS v 0 rasters butt against each other
 
 	rowBytes := (w + 7) / 8
-	// chunkRows is kept just under the most-conservative firmware limit
-	// (2047 rows per GS v 0 on some older Epson clones). Bigger is better:
-	// on the printer we ship with, splitting a ticket at a chunk boundary
-	// caused the chunk-2 raster to print as pure garbage (observed on a
-	// 1380-row ticket that spilled 356 rows into a second chunk — header
-	// fine, everything after row 1024 garbled). Sizing at 2047 keeps every
-	// realistic ticket in a single GS v 0, so the boundary bug can't fire.
-	const chunkRows = 2047
+	// chunkRows is deliberately small. Observed on a NetumScan 80mm printer:
+	// large GS v 0 payloads on dense content (big black glyphs, barcodes,
+	// dithered maps) overflow the printer's internal buffer mid-command. The
+	// raster receiver then hangs waiting for the rest of the declared byte
+	// count, and every following byte — including the ESC @ that opens the
+	// next ticket over a fresh TCP connection — is consumed as more raster.
+	// Result: current ticket stops mid-print, next ticket prints as nonstop
+	// garbage until the printer is power-cycled. Keeping each GS v 0 well
+	// under the internal buffer (256 rows × rowBytes ≈ 18 KB on 576-dot
+	// heads) means the printer fully drains each chunk before we send the
+	// next one, so overflow cannot occur.
+	const chunkRows = 256
 	for y0 := 0; y0 < h; y0 += chunkRows {
 		rows := chunkRows
 		if y0+rows > h {
