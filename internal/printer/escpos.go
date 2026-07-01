@@ -211,11 +211,12 @@ func encodeESCPOS(img image.Image, targetWidth int) []byte {
 	rowBytes := (w + 7) / 8
 	// chunkRows is kept just under the most-conservative firmware limit
 	// (2047 rows per GS v 0 on some older Epson clones). Bigger is better:
-	// many printers add a small paper advance between consecutive GS v 0
-	// raster commands regardless of `ESC 3 0`, so every chunk boundary is a
-	// potential visible gap. 1024 is a good balance — for a typical
-	// 150–250mm receipt that's 1–2 chunks instead of 10+.
-	const chunkRows = 1024
+	// on the printer we ship with, splitting a ticket at a chunk boundary
+	// caused the chunk-2 raster to print as pure garbage (observed on a
+	// 1380-row ticket that spilled 356 rows into a second chunk — header
+	// fine, everything after row 1024 garbled). Sizing at 2047 keeps every
+	// realistic ticket in a single GS v 0, so the boundary bug can't fire.
+	const chunkRows = 2047
 	for y0 := 0; y0 < h; y0 += chunkRows {
 		rows := chunkRows
 		if y0+rows > h {
