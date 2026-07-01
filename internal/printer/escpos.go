@@ -67,7 +67,7 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 		return fmt.Errorf("printer: load rendered PNG: %w", err)
 	}
 
-	payload := encodeESCPOS(img, p.width)
+	packets := encodeESCPOS(img, p.width)
 
 	// When DEBUG_KEEP_PNG is set, drop a copy of both the rendered PNG and
 	// the exact bytes we're about to send to the printer into a debug dir.
@@ -78,7 +78,11 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 		if err := copyFile(pngPath, filepath.Join(dir, stem+".png")); err != nil {
 			log.Printf("printer: debug PNG copy: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, stem+".bin"), payload, 0o644); err != nil {
+		var flat bytes.Buffer
+		for _, p := range packets {
+			flat.Write(p)
+		}
+		if err := os.WriteFile(filepath.Join(dir, stem+".bin"), flat.Bytes(), 0o644); err != nil {
 			log.Printf("printer: debug payload write: %v", err)
 		}
 	}
@@ -89,7 +93,7 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 		return fmt.Errorf("printer: ESC/POS dial %s: %w", p.addr, err)
 	}
 	defer conn.Close()
-	return writePaced(ctx, conn, payload)
+	return writePackets(ctx, conn, packets)
 }
 
 // debugDir returns a directory to drop debug artifacts into, or "" if
@@ -129,46 +133,46 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// writePaced streams payload to the printer in small TCP chunks with a short
-// pause between them. TCP flow control alone is not always enough with cheap
-// 9100-socket thermal printers: some accept bytes at line rate until their
-// small internal buffer fills, then silently drop or misinterpret data — the
-// signature symptom is "clean top of receipt, garbage further down". Pacing
-// keeps the printer's buffer from ever getting near full, at the cost of a
-// few extra ms per ticket.
-func writePaced(ctx context.Context, conn net.Conn, payload []byte) error {
+// writePackets streams pre-split ESC/POS packets to the printer, pausing
+// between each so the printer can physically print (and drain from its
+// internal buffer) the raster it just received before the next one arrives.
+// This is the pattern cheap thermal printers actually need: TCP flow control
+// stops us from overrunning the socket buffer, but nothing stops us from
+// overrunning the *printer's* buffer once the socket is drained — the paper
+// only advances at ~2400 rows/s (300 mm/s on 203 dpi), so a stream of dense
+// raster arriving faster than that fills the buffer and the raster receiver
+// hangs mid-command. Chunked GS v 0 + inter-packet pause is the fix.
+func writePackets(ctx context.Context, conn net.Conn, packets [][]byte) error {
 	const (
-		chunkSize  = 2048
-		chunkPause = 30 * time.Millisecond
-		perChunkTO = 5 * time.Second
-		// 90s is generous — a 1400-row ticket writes ~50 chunks with a
-		// 30ms pause each ≈ 1.5s of pure pacing, plus TCP time. The bulk
-		// of the budget is there so a genuinely slow printer surfaces as
-		// a timeout instead of blocking the hub forever.
-		overallLimit = 90 * time.Second
+		perPacketTO = 5 * time.Second
+		// packetPause is comfortably larger than the physical print time of
+		// one 64-row GS v 0 chunk at 300 mm/s (≈27 ms). 80 ms gives the head
+		// time to advance, the buffer to drain, and the mechanism to settle
+		// before the next raster header hits.
+		packetPause = 80 * time.Millisecond
+		// 120s covers the worst realistic ticket: ~25 packets × 80 ms pause
+		// (~2 s) + TCP + rendering slack. Anything past that is a stuck
+		// printer, not a slow one.
+		overallLimit = 120 * time.Second
 	)
 	deadline := time.Now().Add(overallLimit)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
-	for off := 0; off < len(payload); off += chunkSize {
-		end := off + chunkSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		wdl := time.Now().Add(perChunkTO)
+	for i, pkt := range packets {
+		wdl := time.Now().Add(perPacketTO)
 		if wdl.After(deadline) {
 			wdl = deadline
 		}
 		_ = conn.SetWriteDeadline(wdl)
-		if _, err := conn.Write(payload[off:end]); err != nil {
-			return fmt.Errorf("printer: ESC/POS write at %d/%d: %w", off, len(payload), err)
+		if _, err := conn.Write(pkt); err != nil {
+			return fmt.Errorf("printer: ESC/POS write packet %d/%d: %w", i, len(packets), err)
 		}
-		if end < len(payload) {
+		if i < len(packets)-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(chunkPause):
+			case <-time.After(packetPause):
 			}
 		}
 	}
@@ -202,40 +206,41 @@ func loadImage(path string) (image.Image, error) {
 	return img, err
 }
 
-// encodeESCPOS builds the byte stream sent to the printer:
-// init, then the image as a GS v 0 raster bitmap split into row chunks (some
-// printers reject very tall single chunks), then feed + partial cut.
-func encodeESCPOS(img image.Image, targetWidth int) []byte {
+// encodeESCPOS builds a list of ESC/POS packets to stream to the printer:
+// one prelude (init + line spacing), one packet per raster chunk, and one
+// coda (feed + cut). The caller (writePackets) pauses between packets so
+// each GS v 0 has time to physically print before the next arrives — see
+// the writePackets doc for why that matters on cheap thermal printers.
+func encodeESCPOS(img image.Image, targetWidth int) [][]byte {
 	bw, w, h := imageTo1Bit(img, targetWidth)
-
-	var buf bytes.Buffer
-	buf.Write([]byte{0x1b, 0x40})       // ESC @ — initialize
-	buf.Write([]byte{0x1b, 0x33, 0x00}) // ESC 3 0 — line spacing to 0 so chunked GS v 0 rasters butt against each other
-
 	rowBytes := (w + 7) / 8
-	// chunkRows is deliberately small. Observed on a NetumScan 80mm printer:
-	// large GS v 0 payloads on dense content (big black glyphs, barcodes,
-	// dithered maps) overflow the printer's internal buffer mid-command. The
-	// raster receiver then hangs waiting for the rest of the declared byte
-	// count, and every following byte — including the ESC @ that opens the
-	// next ticket over a fresh TCP connection — is consumed as more raster.
-	// Result: current ticket stops mid-print, next ticket prints as nonstop
-	// garbage until the printer is power-cycled. Keeping each GS v 0 well
-	// under the internal buffer (256 rows × rowBytes ≈ 18 KB on 576-dot
-	// heads) means the printer fully drains each chunk before we send the
-	// next one, so overflow cannot occur.
-	const chunkRows = 256
+
+	// chunkRows sized so each GS v 0 packet fits comfortably in the
+	// smallest plausible printer input buffer (~4 KB on cheap Chinese
+	// clones). 64 rows × 72 bytes ≈ 4.6 KB per packet on a 576-dot head.
+	// Overhead of the extra GS v 0 headers is negligible (8 bytes each).
+	const chunkRows = 64
+
+	packets := make([][]byte, 0, 2+(h+chunkRows-1)/chunkRows)
+
+	// Prelude: init + line spacing zero so consecutive rasters butt together.
+	packets = append(packets, []byte{
+		0x1b, 0x40, // ESC @
+		0x1b, 0x33, 0x00, // ESC 3 0
+	})
+
 	for y0 := 0; y0 < h; y0 += chunkRows {
 		rows := chunkRows
 		if y0+rows > h {
 			rows = h - y0
 		}
+		pkt := make([]byte, 0, 8+rows*rowBytes)
 		// GS v 0 m xL xH yL yH — m=0 is normal (non-doubled) raster
-		buf.Write([]byte{
+		pkt = append(pkt,
 			0x1d, 0x76, 0x30, 0x00,
-			byte(rowBytes & 0xff), byte(rowBytes >> 8),
-			byte(rows & 0xff), byte(rows >> 8),
-		})
+			byte(rowBytes&0xff), byte(rowBytes>>8),
+			byte(rows&0xff), byte(rows>>8),
+		)
 		for ry := 0; ry < rows; ry++ {
 			rowStart := (y0 + ry) * w
 			for xb := 0; xb < rowBytes; xb++ {
@@ -247,14 +252,15 @@ func encodeESCPOS(img image.Image, targetWidth int) []byte {
 						b |= 1 << (7 - bit)
 					}
 				}
-				buf.WriteByte(b)
+				pkt = append(pkt, b)
 			}
 		}
+		packets = append(packets, pkt)
 	}
 
-	// Feed past the cutter and partial-cut. GS V B n feeds n dots then cuts.
-	buf.Write([]byte{0x1d, 0x56, 0x42, 0x40}) // feed 64 dots, partial cut
-	return buf.Bytes()
+	// Coda: feed past the cutter and partial-cut. GS V B n feeds n dots then cuts.
+	packets = append(packets, []byte{0x1d, 0x56, 0x42, 0x40})
+	return packets
 }
 
 // imageTo1Bit converts img to a 1-bit raster of width targetWidth in two
