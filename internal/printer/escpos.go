@@ -72,13 +72,47 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 		return fmt.Errorf("printer: ESC/POS dial %s: %w", p.addr, err)
 	}
 	defer conn.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetWriteDeadline(dl)
-	} else {
-		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	return writePaced(ctx, conn, payload)
+}
+
+// writePaced streams payload to the printer in small TCP chunks with a short
+// pause between them. TCP flow control alone is not always enough with cheap
+// 9100-socket thermal printers: some accept bytes at line rate until their
+// small internal buffer fills, then silently drop or misinterpret data — the
+// signature symptom is "clean top of receipt, garbage further down". Pacing
+// keeps the printer's buffer from ever getting near full, at the cost of a
+// few extra ms per ticket.
+func writePaced(ctx context.Context, conn net.Conn, payload []byte) error {
+	const (
+		chunkSize    = 4096
+		chunkPause   = 15 * time.Millisecond
+		perChunkTO   = 5 * time.Second
+		overallLimit = 60 * time.Second
+	)
+	deadline := time.Now().Add(overallLimit)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
 	}
-	if _, err := conn.Write(payload); err != nil {
-		return fmt.Errorf("printer: ESC/POS write: %w", err)
+	for off := 0; off < len(payload); off += chunkSize {
+		end := off + chunkSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		wdl := time.Now().Add(perChunkTO)
+		if wdl.After(deadline) {
+			wdl = deadline
+		}
+		_ = conn.SetWriteDeadline(wdl)
+		if _, err := conn.Write(payload[off:end]); err != nil {
+			return fmt.Errorf("printer: ESC/POS write at %d/%d: %w", off, len(payload), err)
+		}
+		if end < len(payload) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(chunkPause):
+			}
+		}
 	}
 	return nil
 }
