@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"image"
 	_ "image/png"
+	"io"
+	"log"
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -66,6 +69,20 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 
 	payload := encodeESCPOS(img, p.width)
 
+	// When DEBUG_KEEP_PNG is set, drop a copy of both the rendered PNG and
+	// the exact bytes we're about to send to the printer into a debug dir.
+	// Handy when a ticket looks corrupt on paper — you can diff the artifacts
+	// against a known-good ticket to see where things diverged.
+	if dir := debugDir(); dir != "" {
+		stem := fmt.Sprintf("balloon-%d-%d", t.BalloonID, time.Now().UnixNano())
+		if err := copyFile(pngPath, filepath.Join(dir, stem+".png")); err != nil {
+			log.Printf("printer: debug PNG copy: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, stem+".bin"), payload, 0o644); err != nil {
+			log.Printf("printer: debug payload write: %v", err)
+		}
+	}
+
 	d := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", p.addr)
 	if err != nil {
@@ -73,6 +90,43 @@ func (p *ESCPOS) Print(ctx context.Context, t Ticket) error {
 	}
 	defer conn.Close()
 	return writePaced(ctx, conn, payload)
+}
+
+// debugDir returns a directory to drop debug artifacts into, or "" if
+// debugging is disabled. Set DEBUG_KEEP_PNG=1 to use /tmp/balloons-debug/,
+// or DEBUG_KEEP_PNG=/some/path to choose your own. The directory is created
+// on demand.
+func debugDir() string {
+	v := os.Getenv("DEBUG_KEEP_PNG")
+	if v == "" || v == "0" {
+		return ""
+	}
+	dir := v
+	if v == "1" || v == "true" {
+		dir = "/tmp/balloons-debug"
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("printer: debug dir %s: %v", dir, err)
+		return ""
+	}
+	return dir
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // writePaced streams payload to the printer in small TCP chunks with a short
