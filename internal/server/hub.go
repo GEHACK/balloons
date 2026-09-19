@@ -37,6 +37,10 @@ type Hub struct {
 	scanBaseURL string
 	loc         *time.Location
 
+	// queue serializes print attempts and retries the ones that fail; see
+	// printqueue.go. Started by Run.
+	queue *printQueue
+
 	mu     sync.Mutex
 	state  map[int64]*balloonsv1.Balloon
 	last   snapshot // most recently applied snapshot; kept for reprint ticket data
@@ -54,7 +58,7 @@ func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, lm *loom
 	if loc == nil {
 		loc = time.Local
 	}
-	return &Hub{
+	h := &Hub{
 		dj:                 dj,
 		printer:            p,
 		store:              store,
@@ -67,6 +71,8 @@ func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, lm *loom
 		subs:               map[*subscriber]struct{}{},
 		trigger:            make(chan struct{}, 1),
 	}
+	h.queue = newPrintQueue(h.printOnce)
+	return h
 }
 
 func toSet(s []string) map[string]bool {
@@ -108,19 +114,22 @@ func (h *Hub) Subscribe() (snapshot []*balloonsv1.Balloon, frozen bool, ch <-cha
 	}
 }
 
-func (h *Hub) print(t printer.Ticket) {
-	// Dedupe against the local store so restarts don't reprint and prints
-	// requested twice (e.g. two refreshes racing) only fire once.
-	printed, err := h.store.IsPrinted(t.BalloonID)
-	if err != nil {
-		log.Printf("print balloon %d: state check: %v", t.BalloonID, err)
-		return
+// printOnce is a single print attempt, run by the print queue's worker. A
+// returned error is retryable: the queue backs off and tries the same ticket
+// again, which is what keeps an unplugged or out-of-paper printer from losing
+// balloons. force skips the already-printed dedupe (Reprint).
+func (h *Hub) printOnce(ctx context.Context, t printer.Ticket, force bool) error {
+	if !force {
+		// Dedupe against the local store so restarts don't reprint and prints
+		// requested twice (e.g. two refreshes racing) only fire once.
+		printed, err := h.store.IsPrinted(t.BalloonID)
+		if err != nil {
+			return fmt.Errorf("state check: %w", err)
+		}
+		if printed {
+			return nil
+		}
 	}
-	if printed {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if mapPath, cleanup, err := h.fetchMap(ctx, t.TeamID, t.BalloonID); err != nil {
 		// Map is best-effort — the ticket still has the team's name and
 		// location number, so we print without it rather than failing.
@@ -130,12 +139,12 @@ func (h *Hub) print(t printer.Ticket) {
 		defer cleanup()
 	}
 	if err := h.printer.Print(ctx, t); err != nil {
-		log.Printf("print balloon %d: %v", t.BalloonID, err)
-		return
+		return err
 	}
 	if err := h.store.RecordPrinted(t.BalloonID); err != nil {
 		log.Printf("print balloon %d: record: %v", t.BalloonID, err)
 	}
+	return nil
 }
 
 // fetchMap downloads the per-team map image from loom and writes it to a
@@ -168,8 +177,9 @@ func (h *Hub) fetchMap(ctx context.Context, teamID string, balloonID int64) (str
 }
 
 // Reprint clears the local "already printed" mark for this balloon and
-// re-dispatches the print goroutine using the most recently cached snapshot.
-// Returns ErrBalloonNotFound if the id isn't in the current view.
+// re-queues it using the most recently cached snapshot. The queued job is
+// forced, so it prints even if the mark is re-set by an attempt still in
+// flight. Returns ErrBalloonNotFound if the id isn't in the current view.
 func (h *Hub) Reprint(id int64) error {
 	h.mu.Lock()
 	b, ok := h.state[id]
@@ -183,7 +193,7 @@ func (h *Hub) Reprint(id int64) error {
 	if err := h.store.ClearPrinted(id); err != nil {
 		return err
 	}
-	go h.print(t)
+	h.queue.add(t, true)
 	return nil
 }
 
@@ -195,6 +205,7 @@ func (h *Hub) TriggerRefresh() {
 }
 
 func (h *Hub) Run(ctx context.Context) {
+	go h.queue.run(ctx)
 	h.refresh(ctx)
 	go h.runEventFeed(ctx)
 
@@ -319,7 +330,7 @@ func (h *Hub) buildSnapshot(ctx context.Context) (snapshot, bool) {
 }
 
 // applySnapshot diffs the snapshot against the current hub state under the
-// lock, dispatches print goroutines for newly-added pending balloons, and
+// lock, queues prints for newly-added pending balloons, and
 // broadcasts events to subscribers.
 func (h *Hub) applySnapshot(snap snapshot) {
 	h.mu.Lock()
@@ -343,9 +354,11 @@ func (h *Hub) applySnapshot(snap snapshot) {
 
 // diffEvents compares snap.balloons against the existing hub state and returns
 // one ADDED or UPDATED event per change. For each newly added pending balloon
-// it also dispatches a print goroutine; the printer's own dedupe (state.Store)
-// guarantees we don't reprint on a restart that observes the same balloon as
-// "newly added".
+// it also queues a print; the printer's own dedupe (state.Store) guarantees we
+// don't reprint on a restart that observes the same balloon as "newly added",
+// while a balloon left unprinted by a dead printer is retried on restart.
+//
+// Queueing is a cheap in-memory append, so it's safe to do under h.mu.
 func (h *Hub) diffEvents(snap snapshot) []*balloonsv1.StreamBalloonsResponse {
 	var events []*balloonsv1.StreamBalloonsResponse
 	for id, b := range snap.balloons {
@@ -357,7 +370,7 @@ func (h *Hub) diffEvents(snap snapshot) []*balloonsv1.StreamBalloonsResponse {
 				Balloon: b,
 			})
 			if !b.Done {
-				go h.print(h.ticketFor(b, snap))
+				h.queue.add(h.ticketFor(b, snap), false)
 			}
 		case !proto.Equal(prev, b):
 			events = append(events, &balloonsv1.StreamBalloonsResponse{

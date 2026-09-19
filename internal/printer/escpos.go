@@ -35,8 +35,8 @@ type ESCPOS struct {
 	// raster lands inside the first ticket's GS v 0 body. Observed for real
 	// with a 20-ticket burst — half the tickets printed and the raster
 	// receiver wedged waiting for bytes that had been consumed as another
-	// ticket's payload. The hub fires one print goroutine per newly
-	// discovered balloon, so bursts are normal on a fresh state DB.
+	// ticket's payload. The hub's print queue already serializes prints onto
+	// one worker, so this is belt-and-braces against a second caller.
 	//
 	// Only dial + write are held; rendering stays outside the lock.
 	mu sync.Mutex

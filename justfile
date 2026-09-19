@@ -34,6 +34,10 @@ fmt: fmt-proto fmt-go
 vet:
     go vet ./...
 
+# Run the Go tests.
+test:
+    go test ./...
+
 # Sync go.mod / go.sum.
 tidy:
     go mod tidy
