@@ -150,4 +150,30 @@ export function initScan(deps: ScanDeps) {
     window.setTimeout(focusScan, 0);
   });
   window.addEventListener("focus", focusScan);
+  document.addEventListener("click", () => {
+    window.setTimeout(focusScan, 0);
+  });
+
+  // Last-resort catch: focus can still sit on a button (clicked Reprint, tabbed
+  // there) when a scan arrives, and focusScan deliberately won't steal it. So
+  // redirect the keystrokes instead — a printable character typed outside a
+  // text field means someone/something is scanning, so it belongs in the scan
+  // box. Enter/Tab/arrows are left alone so buttons stay usable, and the scan
+  // suffix then lands on the input we just focused.
+  function isTextEntry(el: Element | null): boolean {
+    if (!el) return false;
+    if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+      return true;
+    if (el instanceof HTMLInputElement) return true;
+    return el instanceof HTMLElement && el.isContentEditable;
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key.length !== 1 || e.key === " ") return;
+    if (isTextEntry(e.target as Element | null)) return;
+    e.preventDefault();
+    scanInput.focus();
+    scanInput.value += e.key;
+  });
 }
