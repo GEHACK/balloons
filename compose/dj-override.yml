@@ -1,0 +1,15 @@
+services:
+  mariadb:
+    volumes:
+      - dj-db:/var/lib/mysql
+
+  domjudge:
+    command: ["bash", "-c", "chown 1000:1000 '${PWD}/webapp/var' && exec /scripts/start.sh"]
+    volumes:
+      - dj-webapp-var:${PWD}/webapp/var
+      - dj-chroot:/chroot
+
+volumes:
+  dj-db:
+  dj-webapp-var:
+  dj-chroot:

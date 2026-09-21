@@ -1,15 +1,22 @@
+# Contest credentials.
 .env
 
-/gen
-/web/src/gen
+# Cargo / dx build output.
+/target
+/dist
 
-/web/dist
-/bin
+# direnv's nix profile + GC roots.
+/.direnv
 
-node_modules
-
+# Local ticket-state database (STATE_DB).
 *.db
 *.db-shm
 *.db-wal
 
+# nix build symlink.
 result
+
+.DS_Store
+
+# Local DOMjudge checkout (dev environment).
+/.domjudge-src

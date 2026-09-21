@@ -4,63 +4,39 @@ set dotenv-load
 default:
     @just --list
 
-# Bootstrap a fresh checkout: install JS deps, generate code, build the frontend.
-bootstrap: install gen build-web
+dj := ".domjudge-src"
+compose := "docker compose -f docker-compose.yml -f ../compose/dj-override.yml"
 
-# Install JS dependencies for the frontend (also installs buf TS plugins).
-install:
-    cd web && npm install
+dj-clone:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -d "{{dj}}/.git" ]; then
+        git -C "{{dj}}" fetch --filter=blob:none origin main
+        git -C "{{dj}}" checkout main
+        git -C "{{dj}}" reset --hard origin/main
+    else
+        git clone --filter=blob:none --branch main \
+            https://github.com/DOMjudge/domjudge.git "{{dj}}"
+    fi
 
-# Regenerate Go + TS from proto/. Run this after editing balloons.proto.
-gen:
-    buf generate
+# Start it. First run builds DOMjudge and debootstraps a chroot — several minutes.
+dj-up:
+    cd {{dj}} && {{compose}} up -d
 
-# Lint the protobuf files.
-lint:
-    buf lint
+dj-down:
+    cd {{dj}} && {{compose}} down
 
-# Format the protobuf files in place.
-fmt-proto:
-    buf format -w
+dj-logs:
+    cd {{dj}} && {{compose}} logs -f
 
-# Format Go source in place.
-fmt-go:
-    gofmt -w .
+dj-shell:
+    cd {{dj}} && {{compose}} exec domjudge bash
 
-# Format everything.
-fmt: fmt-proto fmt-go
 
-# `go vet` across all packages.
-vet:
-    go vet ./...
+dj-pass:
+    @cat {{dj}}/etc/initial_admin_password.secret
 
-# Run the Go tests.
-test:
-    go test ./...
-
-# Sync go.mod / go.sum.
-tidy:
-    go mod tidy
-
-# Build the frontend bundle once (web/dist/app.js + styles.css).
-build-web:
-    cd web && npm run build
-
-# Watch frontend sources: rebuilds CSS and JS on change.
-watch:
-    cd web && npm run watch
-
-# Run the Go server. `.env` is loaded automatically.
-run:
-    go run ./cmd/server
-
-# Build a release binary into bin/server.
-build-server:
-    go build -o bin/server ./cmd/server
-
-# Build everything for release.
-build: build-web build-server
-
-# Delete generated and built artifacts.
-clean:
-    rm -rf gen web/src/gen web/dist bin
+dj-reset:
+    cd {{dj}} && {{compose}} down -v
+    git -C {{dj}} clean -xfdq
+    git -C {{dj}} checkout -- .
