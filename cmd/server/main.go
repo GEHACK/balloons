@@ -87,6 +87,9 @@ func main() {
 	}
 
 	hub := server.NewHub(cfg.dj, p, store, lm, cfg.hideGroups, cfg.noFSGroups, cfg.scanBaseURL, cfg.loc)
+	if err := hub.LoadPrintJobs(); err != nil {
+		log.Fatal(err)
+	}
 	go hub.Run(ctx)
 
 	svc := &server.Server{Hub: hub, DJ: cfg.dj, Store: store}
@@ -97,6 +100,7 @@ func main() {
 	mux.HandleFunc("/scan", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/scan.html")
 	})
+	mux.Handle("/api/cuproxy/print-job", &server.CuproxyWebhook{Hub: hub})
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
 	srv := &http.Server{Addr: cfg.addr, Handler: mux}

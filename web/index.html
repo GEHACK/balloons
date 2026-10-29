@@ -26,6 +26,39 @@
             </h1>
             <div class="flex items-center gap-4">
                 <div
+                    role="group"
+                    aria-label="Which lists this station shows"
+                    class="flex items-center gap-0.5 rounded-md border border-zinc-700 bg-zinc-900/60 p-0.5 light:border-zinc-300 light:bg-white"
+                >
+                    <button
+                        id="view-prints"
+                        type="button"
+                        aria-pressed="true"
+                        title="Show prints"
+                        class="rounded px-2 py-1 text-sm text-zinc-500 hover:text-zinc-200 aria-pressed:bg-zinc-700 aria-pressed:text-zinc-100 light:hover:text-zinc-800 light:aria-pressed:bg-zinc-200 light:aria-pressed:text-zinc-900"
+                    >
+                        🖨 Prints
+                    </button>
+                    <button
+                        id="view-balloons"
+                        type="button"
+                        aria-pressed="true"
+                        title="Show balloons"
+                        class="rounded px-2 py-1 text-sm text-zinc-500 hover:text-zinc-200 aria-pressed:bg-zinc-700 aria-pressed:text-zinc-100 light:hover:text-zinc-800 light:aria-pressed:bg-zinc-200 light:aria-pressed:text-zinc-900"
+                    >
+                        🎈 Balloons
+                    </button>
+                    <button
+                        id="view-order"
+                        type="button"
+                        title="Swap which list comes first"
+                        aria-label="Swap which list comes first"
+                        class="rounded px-2 py-1 text-sm text-zinc-400 hover:text-zinc-100 disabled:cursor-default disabled:opacity-30 light:text-zinc-500 light:hover:text-zinc-900"
+                    >
+                        ⇅
+                    </button>
+                </div>
+                <div
                     id="status"
                     class="flex items-center gap-2 text-sm text-zinc-400 light:text-zinc-600"
                 >
@@ -76,7 +109,7 @@
                     autocorrect="off"
                     autocapitalize="off"
                     spellcheck="false"
-                    placeholder="Scan a balloon ticket (or type id and press Enter)"
+                    placeholder="Scan a balloon ticket or print cover (or type id and press Enter)"
                     class="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 light:border-zinc-300 light:bg-zinc-50 light:text-zinc-900 light:placeholder:text-zinc-400"
                 />
                 <span
@@ -90,45 +123,87 @@
                 class="fixed right-6 top-6 z-50 flex w-80 flex-col gap-2"
             ></div>
 
-            <section class="mb-10">
-                <h2
-                    class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
-                >
-                    PENDING
-                    <span
-                        id="pending-count"
-                        class="text-zinc-500 light:text-zinc-400"
-                        >(0)</span
+            <div id="lists" class="flex flex-col gap-10">
+                <section data-kind="balloons" data-stage="pending">
+                    <h2
+                        class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
                     >
-                </h2>
-                <div id="pending" class="flex flex-col gap-3"></div>
-                <p
-                    id="pending-empty"
-                    class="hidden text-sm italic text-zinc-500 light:text-zinc-400"
-                >
-                    No pending balloons
-                </p>
-            </section>
+                        BALLOONS
+                        <span
+                            id="pending-count"
+                            class="text-zinc-500 light:text-zinc-400"
+                            >(0)</span
+                        >
+                    </h2>
+                    <div id="pending" class="flex flex-col gap-3"></div>
+                    <p
+                        id="pending-empty"
+                        class="hidden text-sm italic text-zinc-500 light:text-zinc-400"
+                    >
+                        No pending balloons
+                    </p>
+                </section>
 
-            <section>
-                <h2
-                    class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
-                >
-                    DELIVERED
-                    <span
-                        id="delivered-count"
-                        class="text-zinc-500 light:text-zinc-400"
-                        >(0)</span
+                <section data-kind="prints" data-stage="pending">
+                    <h2
+                        class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
                     >
-                </h2>
-                <div id="delivered" class="flex flex-col gap-3"></div>
-                <p
-                    id="delivered-empty"
-                    class="text-sm italic text-zinc-500 light:text-zinc-400"
-                >
-                    No delivered balloons yet
-                </p>
-            </section>
+                        PRINTS
+                        <span
+                            id="prints-count"
+                            class="text-zinc-500 light:text-zinc-400"
+                            >(0)</span
+                        >
+                    </h2>
+                    <div id="prints" class="flex flex-col gap-3"></div>
+                    <p
+                        id="prints-empty"
+                        class="hidden text-sm italic text-zinc-500 light:text-zinc-400"
+                    >
+                        No pending prints
+                    </p>
+                </section>
+
+                <section data-kind="balloons" data-stage="done">
+                    <h2
+                        class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
+                    >
+                        DELIVERED BALLOONS
+                        <span
+                            id="delivered-count"
+                            class="text-zinc-500 light:text-zinc-400"
+                            >(0)</span
+                        >
+                    </h2>
+                    <div id="delivered" class="flex flex-col gap-3"></div>
+                    <p
+                        id="delivered-empty"
+                        class="text-sm italic text-zinc-500 light:text-zinc-400"
+                    >
+                        No delivered balloons yet
+                    </p>
+                </section>
+
+                <section data-kind="prints" data-stage="done">
+                    <h2
+                        class="mb-3 text-sm font-semibold tracking-wider text-zinc-300 light:text-zinc-700"
+                    >
+                        DELIVERED PRINTS
+                        <span
+                            id="prints-done-count"
+                            class="text-zinc-500 light:text-zinc-400"
+                            >(0)</span
+                        >
+                    </h2>
+                    <div id="prints-done" class="flex flex-col gap-3"></div>
+                    <p
+                        id="prints-done-empty"
+                        class="text-sm italic text-zinc-500 light:text-zinc-400"
+                    >
+                        No delivered prints yet
+                    </p>
+                </section>
+            </div>
         </main>
 
         <script type="module" src="/dist/app.js"></script>

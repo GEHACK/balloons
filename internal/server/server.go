@@ -21,7 +21,10 @@ type Server struct {
 }
 
 func (s *Server) ListBalloons(_ context.Context, _ *connect.Request[balloonsv1.ListBalloonsRequest]) (*connect.Response[balloonsv1.ListBalloonsResponse], error) {
-	return connect.NewResponse(&balloonsv1.ListBalloonsResponse{Balloons: s.Hub.Snapshot()}), nil
+	return connect.NewResponse(&balloonsv1.ListBalloonsResponse{
+		Balloons:  s.Hub.Snapshot(),
+		PrintJobs: s.Hub.PrintJobSnapshot(),
+	}), nil
 }
 
 func (s *Server) MarkDone(ctx context.Context, req *connect.Request[balloonsv1.MarkDoneRequest]) (*connect.Response[balloonsv1.MarkDoneResponse], error) {
@@ -46,8 +49,18 @@ func (s *Server) Reprint(_ context.Context, req *connect.Request[balloonsv1.Repr
 	return connect.NewResponse(&balloonsv1.ReprintResponse{}), nil
 }
 
+func (s *Server) MarkPrintJobDone(_ context.Context, req *connect.Request[balloonsv1.MarkPrintJobDoneRequest]) (*connect.Response[balloonsv1.MarkPrintJobDoneResponse], error) {
+	if err := s.Hub.MarkPrintJobDone(req.Msg.PrintJobId); err != nil {
+		if errors.Is(err, ErrPrintJobNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&balloonsv1.MarkPrintJobDoneResponse{}), nil
+}
+
 func (s *Server) StreamBalloons(ctx context.Context, _ *connect.Request[balloonsv1.StreamBalloonsRequest], stream *connect.ServerStream[balloonsv1.StreamBalloonsResponse]) error {
-	snap, frozen, ch, unsub := s.Hub.Subscribe()
+	snap, jobs, frozen, ch, unsub := s.Hub.Subscribe()
 	defer unsub()
 
 	if err := stream.Send(&balloonsv1.StreamBalloonsResponse{
@@ -61,6 +74,15 @@ func (s *Server) StreamBalloons(ctx context.Context, _ *connect.Request[balloons
 		if err := stream.Send(&balloonsv1.StreamBalloonsResponse{
 			Kind:    balloonsv1.StreamBalloonsResponse_KIND_ADDED,
 			Balloon: b,
+		}); err != nil {
+			return err
+		}
+	}
+
+	for _, j := range jobs {
+		if err := stream.Send(&balloonsv1.StreamBalloonsResponse{
+			Kind:     balloonsv1.StreamBalloonsResponse_KIND_ADDED,
+			PrintJob: j,
 		}); err != nil {
 			return err
 		}

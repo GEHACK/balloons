@@ -45,7 +45,10 @@ type Hub struct {
 	state  map[int64]*balloonsv1.Balloon
 	last   snapshot // most recently applied snapshot; kept for reprint ticket data
 	frozen bool
-	subs   map[*subscriber]struct{}
+	// printJobs mirrors the store's print_jobs table (cuproxy prints); see
+	// printjobs.go.
+	printJobs map[int64]*balloonsv1.PrintJob
+	subs      map[*subscriber]struct{}
 
 	trigger chan struct{}
 }
@@ -68,6 +71,7 @@ func NewHub(dj *domjudge.Client, p printer.Printer, store *state.Store, lm *loom
 		scanBaseURL:        strings.TrimRight(scanBaseURL, "/"),
 		loc:                loc,
 		state:              map[int64]*balloonsv1.Balloon{},
+		printJobs:          map[int64]*balloonsv1.PrintJob{},
 		subs:               map[*subscriber]struct{}{},
 		trigger:            make(chan struct{}, 1),
 	}
@@ -95,7 +99,7 @@ func (h *Hub) Snapshot() []*balloonsv1.Balloon {
 	return out
 }
 
-func (h *Hub) Subscribe() (snapshot []*balloonsv1.Balloon, frozen bool, ch <-chan *balloonsv1.StreamBalloonsResponse, cancel func()) {
+func (h *Hub) Subscribe() (snapshot []*balloonsv1.Balloon, jobs []*balloonsv1.PrintJob, frozen bool, ch <-chan *balloonsv1.StreamBalloonsResponse, cancel func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s := &subscriber{ch: make(chan *balloonsv1.StreamBalloonsResponse, 256)}
@@ -104,7 +108,7 @@ func (h *Hub) Subscribe() (snapshot []*balloonsv1.Balloon, frozen bool, ch <-cha
 	for _, b := range h.state {
 		snap = append(snap, b)
 	}
-	return snap, h.frozen, s.ch, func() {
+	return snap, h.printJobSnapshotLocked(), h.frozen, s.ch, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if _, ok := h.subs[s]; ok {

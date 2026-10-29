@@ -4,9 +4,10 @@ import {
   BalloonService,
   StreamBalloonsResponse_Kind,
 } from "./gen/balloons/v1/balloons_pb.js";
-import type { Balloon } from "./gen/balloons/v1/balloons_pb.js";
-import { row } from "./render.js";
+import type { Balloon, PrintJob } from "./gen/balloons/v1/balloons_pb.js";
+import { printRow, row } from "./render.js";
 import { initScan } from "./scan.js";
+import { initView } from "./view.js";
 
 const transport = createConnectTransport({ baseUrl: window.location.origin });
 const client = createClient(BalloonService, transport);
@@ -17,6 +18,12 @@ const pendingCountEl = document.getElementById("pending-count")!;
 const deliveredEl = document.getElementById("delivered")!;
 const deliveredEmptyEl = document.getElementById("delivered-empty")!;
 const deliveredCountEl = document.getElementById("delivered-count")!;
+const printsEl = document.getElementById("prints")!;
+const printsEmptyEl = document.getElementById("prints-empty")!;
+const printsCountEl = document.getElementById("prints-count")!;
+const printsDoneEl = document.getElementById("prints-done")!;
+const printsDoneEmptyEl = document.getElementById("prints-done-empty")!;
+const printsDoneCountEl = document.getElementById("prints-done-count")!;
 const statusDot = document.getElementById("status-dot")!;
 const statusText = document.getElementById("status-text")!;
 const freezeBanner = document.getElementById("freeze-banner")!;
@@ -28,6 +35,7 @@ const scanHint = document.getElementById("scan-hint")!;
 const toastStack = document.getElementById("toast-stack")!;
 
 const state = new Map<string, Balloon>();
+const printJobs = new Map<string, PrintJob>();
 
 function applyTheme(theme: "light" | "dark") {
   document.documentElement.classList.toggle("light", theme === "light");
@@ -86,9 +94,26 @@ function render() {
   deliveredEl.innerHTML = "";
   for (const b of delivered) deliveredEl.appendChild(row(b, client));
   deliveredEmptyEl.classList.toggle("hidden", delivered.length !== 0);
+
+  const jobs = [...printJobs.values()];
+  const jobsByNewest = (a: PrintJob, b: PrintJob) => Number(b.id) - Number(a.id);
+  const pendingJobs = jobs.filter((j) => !j.done).sort(jobsByNewest);
+  const doneJobs = jobs.filter((j) => j.done).sort(jobsByNewest);
+
+  printsCountEl.textContent = `(${pendingJobs.length})`;
+  printsDoneCountEl.textContent = `(${doneJobs.length})`;
+
+  printsEl.innerHTML = "";
+  for (const j of pendingJobs) printsEl.appendChild(printRow(j, client));
+  printsEmptyEl.classList.toggle("hidden", pendingJobs.length !== 0);
+
+  printsDoneEl.innerHTML = "";
+  for (const j of doneJobs) printsDoneEl.appendChild(printRow(j, client));
+  printsDoneEmptyEl.classList.toggle("hidden", doneJobs.length !== 0);
 }
 
-initScan({ state, client, scanForm, scanInput, scanHint, toastStack });
+initView();
+initScan({ state, printJobs, client, scanForm, scanInput, scanHint, toastStack });
 
 async function stream() {
   for await (const ev of client.streamBalloons({})) {
@@ -97,8 +122,13 @@ async function stream() {
       freezeBanner.classList.toggle("hidden", !ev.frozen);
       continue;
     }
-    if (!ev.balloon) continue;
-    state.set(ev.balloon.id.toString(), ev.balloon);
+    if (ev.balloon) {
+      state.set(ev.balloon.id.toString(), ev.balloon);
+    } else if (ev.printJob) {
+      printJobs.set(ev.printJob.id.toString(), ev.printJob);
+    } else {
+      continue;
+    }
     render();
   }
 }

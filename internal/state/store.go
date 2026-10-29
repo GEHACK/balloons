@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS ticket_state (
     printed_at   TEXT,
     delivered_at TEXT
 );
+CREATE TABLE IF NOT EXISTS print_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_name     TEXT NOT NULL,
+    requesting_ip TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    delivered_at  TEXT
+);
 `
 
 // Open opens (or creates) the SQLite database at path and ensures the schema
@@ -129,4 +136,68 @@ func (s *Store) Get(balloonID int64) (Record, bool, error) {
 		r.DeliveredAt = &t
 	}
 	return r, true, nil
+}
+
+// PrintJob is one row of print_jobs: a team print that went through cuproxy.
+// Unlike balloons these exist nowhere but here, so this table is their source
+// of truth, not a cache.
+type PrintJob struct {
+	ID           int64
+	TeamName     string
+	RequestingIP string
+	Delivered    bool
+}
+
+// CreatePrintJob inserts a new, undelivered print job and returns it with its
+// freshly assigned id.
+func (s *Store) CreatePrintJob(teamName, requestingIP string) (PrintJob, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO print_jobs (team_name, requesting_ip, created_at) VALUES (?, ?, ?)`,
+		teamName, requestingIP, time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return PrintJob{}, fmt.Errorf("state: CreatePrintJob: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return PrintJob{}, fmt.Errorf("state: CreatePrintJob: last id: %w", err)
+	}
+	return PrintJob{ID: id, TeamName: teamName, RequestingIP: requestingIP}, nil
+}
+
+// RecordPrintJobDelivered sets delivered_at = now() for the print job. No-op
+// if the id doesn't exist.
+func (s *Store) RecordPrintJobDelivered(id int64) error {
+	_, err := s.db.Exec(
+		`UPDATE print_jobs SET delivered_at=? WHERE id=?`,
+		time.Now().UTC().Format(time.RFC3339Nano), id,
+	)
+	if err != nil {
+		return fmt.Errorf("state: RecordPrintJobDelivered(%d): %w", id, err)
+	}
+	return nil
+}
+
+// ListPrintJobs returns every print job, oldest first. Called once at startup
+// to seed the hub.
+func (s *Store) ListPrintJobs() ([]PrintJob, error) {
+	rows, err := s.db.Query(
+		`SELECT id, team_name, requesting_ip, delivered_at IS NOT NULL FROM print_jobs ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("state: ListPrintJobs: %w", err)
+	}
+	defer rows.Close()
+	var out []PrintJob
+	for rows.Next() {
+		var j PrintJob
+		if err := rows.Scan(&j.ID, &j.TeamName, &j.RequestingIP, &j.Delivered); err != nil {
+			return nil, fmt.Errorf("state: ListPrintJobs: scan: %w", err)
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: ListPrintJobs: %w", err)
+	}
+	return out, nil
 }

@@ -9,6 +9,7 @@ service BalloonService {
   rpc StreamBalloons(StreamBalloonsRequest) returns (stream StreamBalloonsResponse) {}
   rpc MarkDone(MarkDoneRequest) returns (MarkDoneResponse) {}
   rpc Reprint(ReprintRequest) returns (ReprintResponse) {}
+  rpc MarkPrintJobDone(MarkPrintJobDoneRequest) returns (MarkPrintJobDoneResponse) {}
 }
 
 message Balloon {
@@ -20,10 +21,21 @@ message Balloon {
   bool first_solve = 6;
 }
 
+// PrintJob is a team print (source code etc.) that went through cuproxy. Its
+// cover sheet carries a code128 barcode of "P<id>" so a runner can scan it
+// delivered like a balloon ticket.
+message PrintJob {
+  int64 id = 1;
+  string team_name = 2;
+  string requesting_ip = 3;
+  bool done = 4;
+}
+
 message ListBalloonsRequest {}
 
 message ListBalloonsResponse {
   repeated Balloon balloons = 1;
+  repeated PrintJob print_jobs = 2;
 }
 
 message StreamBalloonsRequest {}
@@ -36,8 +48,10 @@ message StreamBalloonsResponse {
     KIND_FREEZE = 3;
   }
   Kind kind = 1;
+  // ADDED / UPDATED events carry exactly one of balloon or print_job.
   Balloon balloon = 2;
   bool frozen = 3;
+  PrintJob print_job = 4;
 }
 
 message MarkDoneRequest {
@@ -51,3 +65,9 @@ message ReprintRequest {
 }
 
 message ReprintResponse {}
+
+message MarkPrintJobDoneRequest {
+  int64 print_job_id = 1;
+}
+
+message MarkPrintJobDoneResponse {}

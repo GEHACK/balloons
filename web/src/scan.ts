@@ -1,12 +1,18 @@
 import type { Client } from "@connectrpc/connect";
 import type { BalloonService } from "./gen/balloons/v1/balloons_pb.js";
-import type { Balloon } from "./gen/balloons/v1/balloons_pb.js";
-import { makeBalloonCircle } from "./render.js";
+import type { Balloon, PrintJob } from "./gen/balloons/v1/balloons_pb.js";
+import {
+  makeBalloonCircle,
+  makePrintIcon,
+  printJobCode,
+  printJobTitle,
+} from "./render.js";
 
 const UNDO_MS = 4000;
 
 export interface ScanDeps {
   state: Map<string, Balloon>;
+  printJobs: Map<string, PrintJob>;
   client: Client<typeof BalloonService>;
   scanForm: HTMLFormElement;
   scanInput: HTMLInputElement;
@@ -15,18 +21,62 @@ export interface ScanDeps {
 }
 
 export function initScan(deps: ScanDeps) {
-  const { state, client, scanForm, scanInput, scanHint, toastStack } = deps;
+  const { state, printJobs, client, scanForm, scanInput, scanHint, toastStack } =
+    deps;
   const pendingDeliveries = new Set<string>();
 
-  function parseScan(raw: string): string | null {
+  type Scanned = { kind: "balloon" | "print"; id: string };
+
+  // Balloon tickets encode the bare balloon id (or, on the phone QR, a
+  // /scan?id= URL); cuproxy cover sheets encode "P<print job id>".
+  function parseScan(raw: string): Scanned | null {
     const s = raw.trim();
     if (!s) return null;
-    if (/^\d+$/.test(s)) return s;
+    if (/^\d+$/.test(s)) return { kind: "balloon", id: s };
+    const print = /^p(\d+)$/i.exec(s);
+    if (print) return { kind: "print", id: print[1] };
     try {
       const id = new URL(s, "http://x").searchParams.get("id");
-      if (id && /^\d+$/.test(id)) return id;
+      if (id && /^\d+$/.test(id)) return { kind: "balloon", id };
     } catch {}
     return null;
+  }
+
+  // Deliverable is what the undo toast needs from a scanned item, whether
+  // it's a balloon ticket or a print cover sheet.
+  interface Deliverable {
+    key: string; // unique across kinds
+    icon: () => HTMLElement;
+    title: string;
+    sub: string;
+    // Checked again when the undo window closes: the stream may have flipped
+    // it to done meanwhile (another runner, another tab).
+    isDone: () => boolean;
+    commit: () => Promise<unknown>;
+  }
+
+  function balloonDeliverable(b: Balloon): Deliverable {
+    const idStr = b.id.toString();
+    return {
+      key: `b${idStr}`,
+      icon: () => makeBalloonCircle(b, "sm"),
+      title: b.teamName,
+      sub: `Problem ${b.problemLabel}`,
+      isDone: () => !!state.get(idStr)?.done,
+      commit: () => client.markDone({ balloonId: b.id }),
+    };
+  }
+
+  function printDeliverable(j: PrintJob): Deliverable {
+    const idStr = j.id.toString();
+    return {
+      key: `p${idStr}`,
+      icon: () => makePrintIcon("sm"),
+      title: printJobTitle(j),
+      sub: `Print ${printJobCode(j)}`,
+      isDone: () => !!printJobs.get(idStr)?.done,
+      commit: () => client.markPrintJobDone({ printJobId: j.id }),
+    };
   }
 
   function flashHint(msg: string, kind: "ok" | "err") {
@@ -36,25 +86,24 @@ export function initScan(deps: ScanDeps) {
     window.setTimeout(() => scanHint.classList.add("hidden"), 2500);
   }
 
-  function showDeliverToast(b: Balloon) {
-    const idStr = b.id.toString();
-    if (pendingDeliveries.has(idStr)) return;
-    pendingDeliveries.add(idStr);
+  function showDeliverToast(d: Deliverable) {
+    if (pendingDeliveries.has(d.key)) return;
+    pendingDeliveries.add(d.key);
 
     const toast = document.createElement("div");
     toast.className =
       "flex items-start gap-3 rounded-lg border border-emerald-700/50 bg-emerald-950/90 px-4 py-3 text-sm text-emerald-100 shadow-lg backdrop-blur light:border-emerald-300 light:bg-emerald-50 light:text-emerald-900";
-    toast.appendChild(makeBalloonCircle(b, "sm"));
+    toast.appendChild(d.icon());
 
     const body = document.createElement("div");
     body.className = "min-w-0 flex-1";
     const title = document.createElement("div");
     title.className = "truncate font-semibold";
-    title.textContent = `Delivering: ${b.teamName}`;
+    title.textContent = `Delivering: ${d.title}`;
     body.appendChild(title);
     const sub = document.createElement("div");
     sub.className = "text-xs text-emerald-300/80 light:text-emerald-700";
-    sub.textContent = `Problem ${b.problemLabel}`;
+    sub.textContent = d.sub;
     body.appendChild(sub);
     toast.appendChild(body);
 
@@ -76,57 +125,67 @@ export function initScan(deps: ScanDeps) {
     const finish = () => {
       window.clearInterval(tick);
       window.clearTimeout(commit);
-      pendingDeliveries.delete(idStr);
+      pendingDeliveries.delete(d.key);
       toast.remove();
     };
 
     cancelBtn.onclick = () => {
       finish();
-      flashHint(`Cancelled ${b.teamName}`, "ok");
+      flashHint(`Cancelled ${d.title}`, "ok");
     };
 
     const commit = window.setTimeout(async () => {
       window.clearInterval(tick);
-      // Stream may have flipped the balloon to done while we waited (another
-      // runner, another tab) — don't fire a redundant MarkDone.
-      if (state.get(idStr)?.done) {
+      // Don't fire a redundant mark if it went done while we waited.
+      if (d.isDone()) {
         finish();
         return;
       }
       cancelBtn.disabled = true;
       cancelBtn.textContent = "delivering…";
       try {
-        await client.markDone({ balloonId: b.id });
+        await d.commit();
         finish();
       } catch (err) {
-        console.error("markDone:", err);
-        pendingDeliveries.delete(idStr);
+        console.error("deliver:", err);
+        pendingDeliveries.delete(d.key);
         cancelBtn.disabled = false;
         cancelBtn.textContent = "retry";
         cancelBtn.onclick = () => {
           toast.remove();
-          showDeliverToast(b);
+          showDeliverToast(d);
         };
       }
     }, UNDO_MS);
   }
 
   function handleScan(raw: string) {
-    const id = parseScan(raw);
-    if (!id) {
+    const scanned = parseScan(raw);
+    if (!scanned) {
       flashHint("Unrecognized scan", "err");
       return;
     }
-    const b = state.get(id);
-    if (!b) {
-      flashHint(`Unknown balloon #${id}`, "err");
+    let d: Deliverable;
+    if (scanned.kind === "print") {
+      const j = printJobs.get(scanned.id);
+      if (!j) {
+        flashHint(`Unknown print P${scanned.id}`, "err");
+        return;
+      }
+      d = printDeliverable(j);
+    } else {
+      const b = state.get(scanned.id);
+      if (!b) {
+        flashHint(`Unknown balloon #${scanned.id}`, "err");
+        return;
+      }
+      d = balloonDeliverable(b);
+    }
+    if (d.isDone()) {
+      flashHint(`Already delivered: ${d.title}`, "err");
       return;
     }
-    if (b.done) {
-      flashHint(`Already delivered: ${b.teamName}`, "err");
-      return;
-    }
-    showDeliverToast(b);
+    showDeliverToast(d);
   }
 
   scanForm.addEventListener("submit", (e) => {
