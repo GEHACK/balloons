@@ -13,6 +13,7 @@ A Cargo workspace:
 | Crate | Package | Purpose |
 | --- | --- | --- |
 | `crates/core` | `bode-core` | Shared types and pure logic. Compiles for both the server and the browser (wasm), so no IO. |
+| `crates/backend` | `bode-backend` | Server-only logic: DOMjudge client and the SQLite store. |
 | `crates/app` | `bode` | Dioxus fullstack app: web UI, server functions, server entry point. |
 
 `templates/balloon.typ` is the Typst ticket template.
