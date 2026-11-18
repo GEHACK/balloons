@@ -1,0 +1,51 @@
+# Local DOMjudge for developing Bode. Not for production.
+# Start with `just dj-up` (see the justfile): the judgehost needs a password
+# that the domserver only generates on its first start.
+#
+# Images are amd64-only; on Apple Silicon they run under emulation.
+
+name: bode-domjudge
+
+services:
+  mariadb:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: domjudge
+      MYSQL_USER: domjudge
+      MYSQL_PASSWORD: domjudge
+      MYSQL_DATABASE: domjudge
+    command: --max-connections=1000 --max-allowed-packet=512M
+    volumes:
+      - mariadb:/var/lib/mysql
+
+  domserver:
+    image: domjudge/domserver:${DOMJUDGE_TAG:-bleeding}
+    platform: linux/amd64
+    depends_on: [mariadb]
+    environment:
+      MYSQL_HOST: mariadb
+      MYSQL_USER: domjudge
+      MYSQL_PASSWORD: domjudge
+      MYSQL_ROOT_PASSWORD: domjudge
+      MYSQL_DATABASE: domjudge
+      CONTAINER_TIMEZONE: Europe/Amsterdam
+    ports:
+      - 12345:80
+
+  judgehost:
+    image: domjudge/judgehost:${DOMJUDGE_TAG:-bleeding}
+    platform: linux/amd64
+    profiles: [judge]
+    depends_on: [domserver]
+    privileged: true
+    cgroup: host
+    hostname: judgedaemon-0
+    environment:
+      DAEMON_ID: 0
+      DOMSERVER_BASEURL: http://domserver/
+      JUDGEDAEMON_PASSWORD: ${JUDGEDAEMON_PASSWORD:-}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup
+
+volumes:
+  mariadb:

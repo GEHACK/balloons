@@ -1,0 +1,13 @@
+[package]
+name = "bode-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bode-core = { path = "../core"}
+reqwest = { version = "0.13.5", features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"]}
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"]}
+anyhow = { version = "1.0.104" }
