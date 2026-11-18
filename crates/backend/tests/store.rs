@@ -1,16 +1,10 @@
+mod common;
+
 use std::collections::HashSet;
 
-use bode_backend::{domjudge::Config, store::Store};
-use bode_core::{balloon::GroupFilters, settings::Settings};
-use tempfile::{TempDir, tempdir};
-
-async fn fresh_store() -> (Store, TempDir) {
-    let tempdir = tempdir().expect("Making tempdir failed");
-    let store = Store::open(tempdir.path().join("db.db"))
-        .await
-        .expect("Opening db failed");
-    (store, tempdir)
-}
+use bode_backend::domjudge::Config;
+use bode_core::settings::{GroupFilters, Settings};
+use common::fresh_store;
 
 fn sample_config() -> Config {
     Config {

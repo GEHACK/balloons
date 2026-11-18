@@ -1,7 +1,14 @@
+//! Bode's own state in SQLite. Opening a store runs the migrations.
+
 use crate::domjudge::Config;
-use bode_core::{balloon::GroupFilters, settings::Settings};
+use bode_core::settings::{GroupFilters, Settings};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::path::Path;
+
+// Values of `group_filters.filter`. They must match the CHECK constraint in the
+// init migration.
+const HIDDEN: &str = "hidden";
+const NO_FIRST_SOLVE: &str = "no_first_solve";
 
 pub struct Store {
     pool: SqlitePool,
@@ -17,6 +24,7 @@ impl Store {
         Ok(Store { pool })
     }
 
+    /// `None` until a connection is configured.
     pub async fn domjudge_config(&self) -> Result<Option<Config>, sqlx::Error> {
         sqlx::query_as!(
             Config,
@@ -45,6 +53,7 @@ impl Store {
         Ok(())
     }
 
+    /// The row always exists: the migration inserts it with defaults.
     pub async fn settings(&self) -> Result<Settings, sqlx::Error> {
         sqlx::query_as!(Settings, "SELECT timezone, loom_url FROM settings")
             .fetch_one(&self.pool)
@@ -74,8 +83,8 @@ impl Store {
 
         for row in rows {
             match row.filter.as_str() {
-                "hidden" => filters.hidden.insert(row.group_id),
-                "no_first_solve" => filters.no_first_solve.insert(row.group_id),
+                HIDDEN => filters.hidden.insert(row.group_id),
+                NO_FIRST_SOLVE => filters.no_first_solve.insert(row.group_id),
                 // Unknown filter names are ignored. TODO: log them once Bode has logging.
                 _other => false,
             };
@@ -84,6 +93,7 @@ impl Store {
         Ok(filters)
     }
 
+    /// Replaces all filters at once, in one transaction.
     pub async fn set_group_filters(&self, new_filters: &GroupFilters) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
@@ -91,22 +101,20 @@ impl Store {
             .execute(&mut *tx)
             .await?;
 
-        for group_id in &new_filters.no_first_solve {
-            sqlx::query!(
-                "INSERT INTO group_filters (group_id, filter) VALUES (?, 'no_first_solve')",
-                group_id
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        for group_id in &new_filters.hidden {
-            sqlx::query!(
-                "INSERT INTO group_filters (group_id, filter) VALUES (?, 'hidden')",
-                group_id
-            )
-            .execute(&mut *tx)
-            .await?;
+        let sets = [
+            (HIDDEN, &new_filters.hidden),
+            (NO_FIRST_SOLVE, &new_filters.no_first_solve),
+        ];
+        for (filter, group_ids) in sets {
+            for group_id in group_ids {
+                sqlx::query!(
+                    "INSERT INTO group_filters (group_id, filter) VALUES (?, ?)",
+                    group_id,
+                    filter,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
         }
 
         tx.commit().await?;

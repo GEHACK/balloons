@@ -1,13 +1,28 @@
+//! Client for the DOMjudge REST API.
+
 use reqwest::Method;
 use serde::de::DeserializeOwned;
+use std::fmt;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Config {
     pub base_url: String,
     pub user: String,
     pub password: String,
     pub contest_id: String,
+}
+
+// Written by hand so the password never ends up in logs or test output.
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("base_url", &self.base_url)
+            .field("user", &self.user)
+            .field("password", &"***")
+            .field("contest_id", &self.contest_id)
+            .finish()
+    }
 }
 
 pub struct Client {
@@ -16,6 +31,7 @@ pub struct Client {
 }
 
 impl Client {
+    /// Requests time out after 5 seconds.
     pub fn new(config: Config) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
@@ -69,6 +85,7 @@ impl Client {
         self.get("state").await
     }
 
+    /// One-way in Bode for now, though DOMjudge `main` also has `/undone`.
     pub async fn mark_balloon_delivered(&self, balloon_id: u32) -> Result<(), reqwest::Error> {
         self.request(Method::POST, &format!("balloons/{balloon_id}/done"))
             .send()

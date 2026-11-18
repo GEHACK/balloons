@@ -1,14 +1,8 @@
-use bode_backend::{domjudge::Config, store::Store, tracker::refresh};
-use bode_core::snapshot::DomjudgeStatus;
-use tempfile::{TempDir, tempdir};
+mod common;
 
-async fn fresh_store() -> (Store, TempDir) {
-    let tempdir = tempdir().expect("Making tempdir failed");
-    let store = Store::open(tempdir.path().join("db.db"))
-        .await
-        .expect("Opening db failed");
-    (store, tempdir)
-}
+use bode_backend::{domjudge::Config, tracker::refresh};
+use bode_core::snapshot::DomjudgeStatus;
+use common::fresh_store;
 
 #[tokio::test]
 async fn unconfigured_store_gives_unconfigured() {

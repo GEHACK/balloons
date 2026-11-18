@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
-use bode_core::balloon::{self, Balloon, GroupFilters};
+use bode_core::balloon::{self, Balloon};
 use bode_core::domjudge;
+use bode_core::settings::GroupFilters;
 
 fn dj_balloon(id: u32, team_id: &str, team: &str, problem: &str) -> domjudge::Balloon {
     domjudge::Balloon {

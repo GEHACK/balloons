@@ -1,3 +1,5 @@
+//! Keeps Bode's view of the contest in sync with DOMjudge.
+
 use crate::{domjudge::Client, store::Store};
 use anyhow::Context;
 use bode_core::{
@@ -5,6 +7,8 @@ use bode_core::{
     snapshot::{DomjudgeStatus, Snapshot},
 };
 
+/// Fetches everything once. Never fails: every outcome is a snapshot, and on
+/// an error it has no balloons (keeping the last ones is up to the caller).
 pub async fn refresh(store: &Store) -> Snapshot {
     match fetch(store).await {
         Ok(Some(snapshot)) => snapshot,
