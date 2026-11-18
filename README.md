@@ -51,6 +51,14 @@ Ideas, nothing decided:
 - Also covers rejudges, which can change verdicts after the fact.
 - A balloon's `time` is the submission's submit time (DOMjudge `BalloonService`, checked on main in Nov 2026), so ordering by `time` is right once every earlier submission is judged. The open question is only how to know none are still pending.
 
+Where the pending submissions could come from:
+
+- **REST, in the refresh:** fetch `/submissions` and `/judgements`; a submission without a final judgement is pending. Self-healing like the rest of the refresh, but `/submissions` grows over the contest (check `/api/doc` for a filter). Only problems whose first solve isn't settled yet need checking.
+- **The event-feed as data:** maintain the pending set from `submissions` and `judgements` events. Fast and cheap, but a missed event leaves a submission pending forever.
+- **Hybrid:** the feed for speed, an occasional REST check to correct it.
+
+Either way, the hub's design stays: the refresh is the source of truth, and the event-feed task only gains a second job.
+
 ## Configuration
 
 The DOMjudge connection, group filters, printers, contest timezone, scan URL and loom URL are set in the web UI and stored in SQLite. Only what's needed before the database opens comes from the environment (see `.env.example`):

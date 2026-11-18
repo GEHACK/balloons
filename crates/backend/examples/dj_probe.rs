@@ -1,8 +1,11 @@
 use anyhow::Context;
 use bode_backend::domjudge::{Client, Config};
+use bode_backend::store::Store;
+use bode_backend::tracker::refresh;
 use bode_core::balloon::{GroupFilters, from_domjudge};
 use std::collections::HashSet;
 use std::env;
+use tempfile::tempdir;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,6 +50,18 @@ async fn main() -> anyhow::Result<()> {
     for b in f {
         println!("{}: {}", b.team_name, b.id);
     }
+
+    let tempdir = tempdir().expect("Making tempdir failed");
+    let store = Store::open(tempdir.path().join("db.db"))
+        .await
+        .expect("Opening db failed");
+    let config = load_env()?;
+    store.set_domjudge_config(&config).await?;
+    let a = refresh(&store).await;
+    for b in a.balloons {
+        println!("{}", b.id);
+    }
+
     Ok(())
 }
 

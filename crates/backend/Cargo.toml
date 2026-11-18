@@ -8,8 +8,8 @@ bode-core = { path = "../core"}
 reqwest = { version = "0.13.5", features = ["json"] }
 serde = { version = "1.0.229", features = ["derive"]}
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "migrate", "macros"]}
+anyhow = { version = "1.0.104" }
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"]}
-anyhow = { version = "1.0.104" }
 tempfile = { version="3.27.0" }
