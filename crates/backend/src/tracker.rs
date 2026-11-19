@@ -9,6 +9,12 @@ use bode_core::{
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 
+/// How often to refresh without a trigger. Only a safety net: the triggers
+/// (event feed, deliveries, print jobs) are the fast path.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Refreshes on a timer and on request, and publishes the result to every
+/// subscriber.
 pub struct Tracker {
     store: Store,
     sender: watch::Sender<Snapshot>,
@@ -28,12 +34,15 @@ impl Tracker {
         self.sender.subscribe()
     }
 
+    /// Asks for a refresh. Calls made during a refresh collapse into one.
     pub fn trigger_refresh(&self) {
         self.refresh_requested.notify_one();
     }
 
+    /// Refreshes right away, then on every trigger or tick. Subscribers only
+    /// wake when the snapshot actually changes. Never returns: spawn it.
     pub async fn run(&self) -> ! {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut interval = tokio::time::interval(REFRESH_INTERVAL);
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
@@ -44,6 +53,8 @@ impl Tracker {
         }
     }
 
+    /// Marks the balloon done in DOMjudge, then triggers a refresh so every
+    /// subscriber sees it.
     pub async fn mark_delivered(&self, balloon_id: u32) -> anyhow::Result<()> {
         let client = client(&self.store)
             .await?
@@ -58,7 +69,7 @@ impl Tracker {
 }
 
 /// Fetches everything once. Never fails: every outcome is a snapshot, and on
-/// an error it has no balloons (keeping the last ones is up to the caller).
+/// an error it has no balloons ([`Snapshot::merge`] keeps the last ones).
 pub async fn refresh(store: &Store) -> Snapshot {
     match fetch(store).await {
         Ok(Some(snapshot)) => snapshot,

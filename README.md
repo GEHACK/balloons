@@ -57,7 +57,7 @@ Where the pending submissions could come from:
 - **The event-feed as data:** maintain the pending set from `submissions` and `judgements` events. Fast and cheap, but a missed event leaves a submission pending forever.
 - **Hybrid:** the feed for speed, an occasional REST check to correct it.
 
-Either way, the hub's design stays: the refresh is the source of truth, and the event-feed task only gains a second job.
+Either way, the tracker's design stays: the refresh is the source of truth, and the event-feed task only gains a second job.
 
 ## Configuration
 
