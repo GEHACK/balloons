@@ -43,6 +43,18 @@ impl Tracker {
             self.sender.send_if_modified(|current| current.merge(new));
         }
     }
+
+    pub async fn mark_delivered(&self, balloon_id: u32) -> anyhow::Result<()> {
+        let client = client(&self.store)
+            .await?
+            .context("DOMjudge connection not configured")?;
+        client
+            .mark_balloon_delivered(balloon_id)
+            .await
+            .with_context(|| format!("marking balloon {balloon_id} delivered"))?;
+        self.trigger_refresh();
+        Ok(())
+    }
 }
 
 /// Fetches everything once. Never fails: every outcome is a snapshot, and on
@@ -61,16 +73,23 @@ pub async fn refresh(store: &Store) -> Snapshot {
     }
 }
 
-async fn fetch(store: &Store) -> anyhow::Result<Option<Snapshot>> {
-    let config = match store
+/// A client for the stored connection, `None` if there is none.
+async fn client(store: &Store) -> anyhow::Result<Option<Client>> {
+    let Some(config) = store
         .domjudge_config()
         .await
         .context("reading DOMjudge connection")?
-    {
-        Some(c) => c,
-        None => return Ok(None),
+    else {
+        return Ok(None);
     };
     let client = Client::new(config).context("creating DOMjudge client")?;
+    Ok(Some(client))
+}
+
+async fn fetch(store: &Store) -> anyhow::Result<Option<Snapshot>> {
+    let Some(client) = client(store).await? else {
+        return Ok(None);
+    };
     let balloons_from_dj = client.fetch_balloons().await.context("fetching balloons")?;
     let teams = client.fetch_teams().await.context("fetching teams")?;
     let filters = store

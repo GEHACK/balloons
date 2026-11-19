@@ -75,3 +75,28 @@ async fn running_tracker_publishes_error_for_unreachable_domjudge() {
         "expected an error, got {status:?}"
     );
 }
+
+#[tokio::test]
+async fn mark_delivered_without_connection_fails() {
+    let (store, _dir) = fresh_store().await;
+    let tracker = Tracker::new(store);
+
+    let err = tracker.mark_delivered(1).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("not configured"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn mark_delivered_on_unreachable_domjudge_fails() {
+    let (store, _dir) = fresh_store().await;
+    configure_unreachable(&store).await;
+    let tracker = Tracker::new(store);
+
+    let err = tracker.mark_delivered(1).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("marking balloon 1 delivered"),
+        "unexpected error: {err:#}"
+    );
+}
