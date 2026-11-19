@@ -20,3 +20,23 @@ pub enum DomjudgeStatus {
     /// The error and its causes, readable for the admin.
     Error(String),
 }
+
+impl Snapshot {
+    /// Takes in a freshly fetched snapshot and reports whether anything
+    /// changed. On an error the balloons and `frozen` are kept, so a DOMjudge
+    /// hiccup doesn't empty the screen.
+    pub fn merge(&mut self, new: Snapshot) -> bool {
+        let wanted = match new.status {
+            DomjudgeStatus::Error(e) => Snapshot {
+                status: DomjudgeStatus::Error(e),
+                ..self.clone()
+            },
+            _ => new,
+        };
+        if *self == wanted {
+            return false;
+        }
+        *self = wanted;
+        true
+    }
+}
