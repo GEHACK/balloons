@@ -6,6 +6,59 @@ use bode_core::{
     balloon::from_domjudge,
     snapshot::{DomjudgeStatus, Snapshot},
 };
+use std::time::Duration;
+use tokio::sync::{Notify, watch};
+
+pub struct Tracker {
+    store: Store,
+    sender: watch::Sender<Snapshot>,
+    refresh_requested: Notify,
+}
+
+impl Tracker {
+    pub fn new(store: Store) -> Self {
+        Tracker {
+            store,
+            sender: watch::Sender::new(Snapshot::default()),
+            refresh_requested: Notify::new(),
+        }
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Snapshot> {
+        self.sender.subscribe()
+    }
+
+    pub fn trigger_refresh(&self) {
+        self.refresh_requested.notify_one();
+    }
+
+    pub async fn run(&self) -> ! {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = self.refresh_requested.notified() => {}
+            };
+            let new = refresh(&self.store).await;
+            self.sender.send_if_modified(|current| merge(current, new));
+        }
+    }
+}
+
+fn merge(current: &mut Snapshot, new: Snapshot) -> bool {
+    let wanted = match new.status {
+        DomjudgeStatus::Error(e) => Snapshot {
+            status: DomjudgeStatus::Error(e),
+            ..current.clone()
+        },
+        _ => new,
+    };
+    if *current == wanted {
+        return false;
+    }
+    *current = wanted;
+    true
+}
 
 /// Fetches everything once. Never fails: every outcome is a snapshot, and on
 /// an error it has no balloons (keeping the last ones is up to the caller).

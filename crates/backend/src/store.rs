@@ -10,6 +10,7 @@ use std::path::Path;
 const HIDDEN: &str = "hidden";
 const NO_FIRST_SOLVE: &str = "no_first_solve";
 
+#[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
 }
